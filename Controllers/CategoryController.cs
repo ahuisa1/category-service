@@ -1,7 +1,7 @@
 ﻿using CategoryService.Entities;
 using CategoryService.Repositories;
 using Microsoft.AspNetCore.Mvc;
-
+using System.Security.Cryptography;
 namespace CategoryService.Controllers;
 
 [ApiController]
