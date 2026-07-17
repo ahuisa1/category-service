@@ -43,6 +43,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'HIGH,CRITICAL'
+          exit-code: '1' #Break the build
       - name: Dashboard -> Subir Trivy a GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
