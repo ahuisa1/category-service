@@ -1,0 +1,100 @@
+﻿name: Deploy Category Service
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.cs'
+      - '**/*.csproj'
+      - 'appsettings*.json'
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+  # NUEVO: Permiso obligatorio para subir los Dashboards de Semgrep y Trivy a GitHub
+  security-events: write 
+env:
+  DOTNET_VERSION: '8.0.x'
+  ARTIFACT_NAME: 'category-service-drop'
+  WEBAPP_NAME: 'WAPPCUSAPPD0210' 
+jobs:
+  # ==========================================
+  # JOB 1: SEGURIDAD, COMPILAR Y EMPAQUETAR
+  # ==========================================
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # NUEVO: SonarQube necesita el historial completo para calcular deuda técnica
+          fetch-depth: 0 
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      # --- INICIO BLOQUE DEVSECOPS ---
+      - name: Escaneo SCA (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+      - name: Dashboard -> Subir Trivy a GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'SCA-Trivy'
+
+      # --- NUEVO BLOQUE SAST (Semgrep por CLI) ---
+      - name: Escaneo SAST (Semgrep CLI)
+        run: |
+          pip install semgrep
+          semgrep scan --config auto --sarif --output semgrep.sarif || true
+      - name: Dashboard -> Subir Semgrep a GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'semgrep.sarif'
+          category: 'SAST-Semgrep'
+      # --- FIN BLOQUE DEVSECOPS (INICIO) ---
+      - name: Restore dependencies
+        run: dotnet restore ./CategoryService.csproj
+      - name: Build application (Sonar analiza aquí)
+        run: dotnet build ./CategoryService.csproj --configuration Release --no-restore
+      - name: Publish application
+        run: dotnet publish ./CategoryService.csproj --configuration Release --no-build --output ./publish
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ./publish/
+          retention-days: 1 
+  # ==========================================
+  # JOB 2: DESPLEGAR A AZURE
+  # ==========================================
+  deploy:
+    name: Deploy to Web App
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ./publish
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.WEBAPP_NAME }}
+          package: ./publish
